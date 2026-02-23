@@ -3,6 +3,7 @@ import 'package:ble_signal_app/classical_b.dart';
 import 'package:ble_signal_app/gatt_ble/options.dart';
 import 'package:ble_signal_app/new_becon_nature.dart';
 import 'package:ble_signal_app/permissions.dart';
+import 'package:ble_signal_app/service_id_ble.dart';
 import 'package:ble_signal_app/test4.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -157,12 +158,10 @@ class _HomePageState extends State<HomePage> {
                     onPressed: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => AttendanceEntryPage(),
-                        ),
+                        MaterialPageRoute(builder: (_) => BleTestDebugPage()),
                       );
                     },
-                    child: const Text('gatt_ble'),
+                    child: const Text('service_id_ble'),
                   ),
                 ],
               ),
