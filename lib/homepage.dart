@@ -1,3 +1,4 @@
+import 'package:ble_signal_app/ClassicBeManager.dart';
 import 'package:ble_signal_app/ble_page.dart';
 import 'package:ble_signal_app/classical_b.dart';
 import 'package:ble_signal_app/gatt_ble/options.dart';
@@ -126,11 +127,11 @@ class _HomePageState extends State<HomePage> {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => ClassicBluetoothTestPage(),
+                          builder: (_) => ClassicBtTestPage(),
                         ),
                       );
                     },
-                    child: const Text('New Scanner'),
+                    child: const Text('ClassicBtManager'),
                   ),
                   // const SizedBox(height: 20),
                   // ElevatedButton(
@@ -147,10 +148,10 @@ class _HomePageState extends State<HomePage> {
                     onPressed: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => TokenTransferPage()),
+                        MaterialPageRoute(builder: (_) => AttendanceEntryPage()),
                       );
                     },
-                    child: const Text('test4'),
+                    child: const Text('gatt'),
                   ),
 
                   const SizedBox(height: 20),
@@ -163,6 +164,9 @@ class _HomePageState extends State<HomePage> {
                     },
                     child: const Text('service_id_ble'),
                   ),
+
+
+
                 ],
               ),
       ),

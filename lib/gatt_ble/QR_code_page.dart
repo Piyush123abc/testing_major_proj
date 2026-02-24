@@ -26,6 +26,10 @@ class _ReceiverPageState extends State<ReceiverPage> {
   final bool _verboseMode = true;
   final List<String> _terminalLogs = [];
 
+  // --- NEW TESTING CONTROLS ---
+  bool _useForegroundService = true; // Default to true for aggressive phones
+  String _selectedAdvMode = 'LOW_LATENCY';
+
   // This is the static UUID we put in the QR code
   final String serviceUuid = "87654321-4321-4321-4321-cba987654321";
 
@@ -47,6 +51,7 @@ class _ReceiverPageState extends State<ReceiverPage> {
 
   void _addLog(String msg, {bool isMatch = false}) {
     if (!_verboseMode && !isMatch) return;
+    if (!mounted) return;
     setState(() {
       _terminalLogs.insert(
         0,
@@ -62,10 +67,14 @@ class _ReceiverPageState extends State<ReceiverPage> {
     }
 
     try {
-      // Tell Kotlin to start the GATT server and Advertiser
-      await _methodChannel.invokeMethod('startServer');
+      // Pass the new anti-kill parameters to Kotlin
+      await _methodChannel.invokeMethod('startServer', {
+        'useForegroundService': _useForegroundService,
+        'advMode': _selectedAdvMode,
+      });
       setState(() => _isAdvertising = true);
-      _addLog("PIPE: Native GATT Server Hosted.", isMatch: false);
+      _addLog("PIPE: Native GATT Server Hosted | Mode: $_selectedAdvMode", isMatch: false);
+      if (_useForegroundService) _addLog("SHIELD: Foreground Keep-Alive Active.", isMatch: false);
       _addLog("BROADCASTING: $serviceUuid", isMatch: false);
     } catch (e) {
       _addLog("ERROR: Native bridge failed - $e");
@@ -95,7 +104,7 @@ class _ReceiverPageState extends State<ReceiverPage> {
     String qrData = serviceUuid;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0A), // Deep black-grey
+      backgroundColor: const Color(0xFF0A0A0A),
       appBar: AppBar(
         title: const Text(
           "TEACHER: ATTENDANCE HUB",
@@ -113,7 +122,6 @@ class _ReceiverPageState extends State<ReceiverPage> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // Header Card
             Expanded(
               flex: 5,
               child: Container(
@@ -124,97 +132,97 @@ class _ReceiverPageState extends State<ReceiverPage> {
                   border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
                 ),
                 child: !_isAdvertising
-                    ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text(
-                            "CREATE SESSION",
-                            style: TextStyle(
-                              color: Colors.blueAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                          const SizedBox(height: 25),
-                          TextField(
-                            controller: _uidController,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                            ), // Large white text
-                            decoration: InputDecoration(
-                              labelText: "TEACHER NAME / UID",
-                              labelStyle: const TextStyle(
-                                color: Colors.white70,
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: const BorderSide(
-                                  color: Colors.blueAccent,
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide: const BorderSide(
-                                  color: Colors.cyanAccent,
-                                  width: 2,
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              prefixIcon: const Icon(
-                                Icons.person,
+                    ? SingleChildScrollView(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              "CREATE SESSION",
+                              style: TextStyle(
                                 color: Colors.blueAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 30),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 55,
-                            child: ElevatedButton.icon(
-                              onPressed: _startNativeServer,
-                              icon: const Icon(Icons.radar),
-                              label: const Text(
-                                "HOST GATT SERVER",
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
+                            const SizedBox(height: 15),
+                            TextField(
+                              controller: _uidController,
+                              style: const TextStyle(color: Colors.white, fontSize: 18),
+                              decoration: InputDecoration(
+                                labelText: "TEACHER NAME / UID",
+                                labelStyle: const TextStyle(color: Colors.white70),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: const BorderSide(color: Colors.blueAccent),
+                                  borderRadius: BorderRadius.circular(10),
                                 ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderSide: const BorderSide(color: Colors.cyanAccent, width: 2),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                prefixIcon: const Icon(Icons.person, color: Colors.blueAccent),
                               ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blueAccent,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
+                            ),
+                            const SizedBox(height: 15),
+
+                            // --- NEW: ADVERTISE MODE DROPDOWN ---
+                            DropdownButtonFormField<String>(
+                              value: _selectedAdvMode,
+                              dropdownColor: Colors.blueGrey[900],
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                labelText: "BLE Transmit Power",
+                                labelStyle: const TextStyle(color: Colors.blueAccent),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: const BorderSide(color: Colors.blueAccent),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                               ),
+                              items: const [
+                                DropdownMenuItem(value: 'LOW_LATENCY', child: Text("Low Latency (High Power)")),
+                                DropdownMenuItem(value: 'BALANCED', child: Text("Balanced")),
+                                DropdownMenuItem(value: 'LOW_POWER', child: Text("Low Power (Battery Saver)")),
+                              ],
+                              onChanged: (val) => setState(() => _selectedAdvMode = val!),
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: 10),
+
+                            // --- NEW: FOREGROUND SERVICE TOGGLE ---
+                            SwitchListTile(
+                              title: const Text("Foreground Keep-Alive", style: TextStyle(color: Colors.white, fontSize: 14)),
+                              subtitle: const Text("Stops Infinix from killing server", style: TextStyle(color: Colors.white54, fontSize: 12)),
+                              value: _useForegroundService,
+                              activeColor: Colors.blueAccent,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: (val) => setState(() => _useForegroundService = val),
+                            ),
+
+                            const SizedBox(height: 20),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 55,
+                              child: ElevatedButton.icon(
+                                onPressed: _startNativeServer,
+                                icon: const Icon(Icons.radar),
+                                label: const Text("HOST GATT SERVER", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blueAccent,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       )
                     : Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Text(
-                            "BROADCASTING ACTIVE",
-                            style: TextStyle(
-                              color: Colors.greenAccent,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 2,
-                            ),
-                          ),
+                          const Text("BROADCASTING ACTIVE", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, letterSpacing: 2)),
                           const SizedBox(height: 25),
                           Container(
                             padding: const EdgeInsets.all(15),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                            child: bw.BarcodeWidget(
-                              barcode: bw.Barcode.qrCode(),
-                              data: qrData,
-                              width: 200,
-                              height: 200,
-                            ),
+                            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15)),
+                            child: bw.BarcodeWidget(barcode: bw.Barcode.qrCode(), data: qrData, width: 200, height: 200),
                           ),
                           const SizedBox(height: 30),
                           SizedBox(
@@ -223,16 +231,11 @@ class _ReceiverPageState extends State<ReceiverPage> {
                             child: ElevatedButton.icon(
                               onPressed: _stopNativeServer,
                               icon: const Icon(Icons.stop_circle),
-                              label: const Text(
-                                "SHUTDOWN SERVER",
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
+                              label: const Text("SHUTDOWN SERVER", style: TextStyle(fontWeight: FontWeight.bold)),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.redAccent,
                                 foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                             ),
                           ),
@@ -241,26 +244,15 @@ class _ReceiverPageState extends State<ReceiverPage> {
               ),
             ),
             const SizedBox(height: 15),
-
-            // Terminal Log Header
             Row(
               children: [
                 const Icon(Icons.terminal, color: Colors.greenAccent, size: 18),
                 const SizedBox(width: 8),
-                Text(
-                  "SYSTEM LOGS",
-                  style: TextStyle(
-                    color: Colors.greenAccent.withOpacity(0.8),
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                Text("SYSTEM LOGS", style: TextStyle(color: Colors.greenAccent.withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 5),
             const Divider(color: Colors.greenAccent, thickness: 0.5),
-
-            // Terminal Window
             Expanded(
               flex: 2,
               child: Container(
@@ -269,22 +261,13 @@ class _ReceiverPageState extends State<ReceiverPage> {
                 decoration: BoxDecoration(
                   color: Colors.black,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: Colors.greenAccent.withOpacity(0.3),
-                  ),
+                  border: Border.all(color: Colors.greenAccent.withOpacity(0.3)),
                 ),
                 child: ListView.builder(
                   itemCount: _terminalLogs.length,
                   itemBuilder: (c, i) => Padding(
                     padding: const EdgeInsets.symmetric(vertical: 3.0),
-                    child: Text(
-                      _terminalLogs[i],
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
+                    child: Text(_terminalLogs[i], style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontFamily: 'monospace')),
                   ),
                 ),
               ),

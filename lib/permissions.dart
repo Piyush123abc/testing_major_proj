@@ -8,6 +8,7 @@ class AppPermissions {
     Permission.bluetoothAdvertise,
     Permission.location,
     Permission.camera,
+    Permission.notification, // <-- ADDED: Required for Foreground Service UI on Android 13+
     // Permission.microphone,
   ];
 
@@ -27,6 +28,14 @@ class AppPermissions {
 
       if (!status.isGranted) return false;
     }
+
+    // --- ADDED FOR INFINIX/XIAOMI/AGGRESSIVE OS BATTERY THROTTLING ---
+    PermissionStatus batteryStatus = await Permission.ignoreBatteryOptimizations.status;
+    if (!batteryStatus.isGranted) {
+      // This forces the OS to ask the user to disable battery restrictions
+      await Permission.ignoreBatteryOptimizations.request(); 
+    }
+    // -----------------------------------------------------------------
 
     // NFC is optional; do NOT block
     return true;

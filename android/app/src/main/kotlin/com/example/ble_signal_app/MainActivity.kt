@@ -21,6 +21,10 @@ class MainActivity: FlutterActivity() {
     private val METHOD_CHANNEL = "com.attendance/command"
     private val EVENT_CHANNEL = "com.attendance/events"
     
+    // --- NEW: Classic BT Channel ---
+    private val CLASSIC_BT_CHANNEL = "com.attendance/classic_bt"
+    private var classicBtManager: ClassicBtManager? = null
+
     // The fixed UUIDs for your classroom
     private val SERVICE_UUID = UUID.fromString("87654321-4321-4321-4321-cba987654321")
     private val CHAR_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555")
@@ -32,7 +36,10 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // 1. The Walkie-Talkie (Commands from Flutter)
+        // --- NEW: Initialize Classic BT Manager ---
+        classicBtManager = ClassicBtManager(this)
+
+        // 1. The Walkie-Talkie (Commands from Flutter for BLE)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "startServer") {
                 startBleServer()
@@ -45,7 +52,7 @@ class MainActivity: FlutterActivity() {
             }
         }
 
-        // 2. The Ticker-Tape (Data to Flutter)
+        // 2. The Ticker-Tape (Data to Flutter for BLE)
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -56,6 +63,31 @@ class MainActivity: FlutterActivity() {
                 }
             }
         )
+
+        // --- 3. NEW: The Classic BT Listener ---
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CLASSIC_BT_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startServer" -> {
+                    val uuid = call.argument<String>("uuid") ?: return@setMethodCallHandler result.error("ERR", "No UUID", null)
+                    classicBtManager?.startServer(uuid, result)
+                }
+                "stopServer" -> {
+                    classicBtManager?.stopServer()
+                    result.success("Server Stopped")
+                }
+                "connectAndPing" -> {
+                    val mac = call.argument<String>("mac") ?: return@setMethodCallHandler result.error("ERR", "No MAC", null)
+                    val uuid = call.argument<String>("uuid") ?: return@setMethodCallHandler result.error("ERR", "No UUID", null)
+                    val payload = call.argument<String>("payload") ?: "PING"
+                    classicBtManager?.connectAndPing(mac, uuid, payload, result)
+                }
+                "disconnectClient" -> {
+                    classicBtManager?.stopClient()
+                    result.success("Client Stopped")
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     private fun startBleServer() {
