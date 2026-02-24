@@ -137,12 +137,17 @@ class BluetoothService(private val context: Context, private val eventCallback: 
         }
     }
 
-    private fun logDebug(message: String) {
-        Log.d(TAG, message)
-        handler.post {
-            eventCallback(mapOf("event" to "debug", "message" to message))
-        }
+    // In your ble.kt, update the logDebug function slightly:
+private fun logDebug(message: String, isError: Boolean = false) {
+    if (isError) Log.e(TAG, message) else Log.d(TAG, message)
+    handler.post {
+        val prefix = if (isError) "ERROR:CLASSIC_BT:" else "LOG:"
+        eventCallback(mapOf("event" to "debug", "message" to "$prefix $message"))
     }
+}
+
+// Then wherever you have a catch (e: IOException) in that file, 
+// update the log to: logDebug("Error: ${e.message}", isError = true)
 
     // -------------------- UTILS --------------------
     private fun BluetoothDevice.fetchRssi(): Int {

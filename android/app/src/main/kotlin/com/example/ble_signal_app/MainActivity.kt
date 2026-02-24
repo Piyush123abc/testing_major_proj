@@ -16,16 +16,14 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.util.UUID
 
-@SuppressLint("MissingPermission") // We handle permissions natively in Flutter!
+@SuppressLint("MissingPermission")
 class MainActivity: FlutterActivity() {
     private val METHOD_CHANNEL = "com.attendance/command"
     private val EVENT_CHANNEL = "com.attendance/events"
     
-    // --- NEW: Classic BT Channel ---
     private val CLASSIC_BT_CHANNEL = "com.attendance/classic_bt"
     private var classicBtManager: ClassicBtManager? = null
 
-    // The fixed UUIDs for your classroom
     private val SERVICE_UUID = UUID.fromString("87654321-4321-4321-4321-cba987654321")
     private val CHAR_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555")
 
@@ -36,14 +34,12 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // --- NEW: Initialize Classic BT Manager ---
         classicBtManager = ClassicBtManager(this)
 
-        // 1. The Walkie-Talkie (Commands from Flutter for BLE)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "startServer") {
                 startBleServer()
-                result.success("Server Started")
+                result.success("Server Initialization Command Sent to OS")
             } else if (call.method == "stopServer") {
                 stopBleServer()
                 result.success("Server Stopped")
@@ -52,7 +48,6 @@ class MainActivity: FlutterActivity() {
             }
         }
 
-        // 2. The Ticker-Tape (Data to Flutter for BLE)
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -64,8 +59,8 @@ class MainActivity: FlutterActivity() {
             }
         )
 
-        // --- 3. NEW: The Classic BT Listener ---
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CLASSIC_BT_CHANNEL).setMethodCallHandler { call, result ->
+            // (Keeping your classic BT channel intact)
             when (call.method) {
                 "startServer" -> {
                     val uuid = call.argument<String>("uuid") ?: return@setMethodCallHandler result.error("ERR", "No UUID", null)
@@ -92,8 +87,15 @@ class MainActivity: FlutterActivity() {
 
     private fun startBleServer() {
         bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+        val adapter = bluetoothManager?.adapter
+
+        if (adapter == null || !adapter.isMultipleAdvertisementSupported) {
+            Handler(Looper.getMainLooper()).post {
+                eventSink?.success("FATAL:HARDWARE: FEATURE_UNSUPPORTED. This phone physically cannot host a GATT server.")
+            }
+            return
+        }
         
-        // --- 1. SET UP THE NATIVE ANDROID GATT SERVER ---
         bluetoothGattServer = bluetoothManager?.openGattServer(this, gattServerCallback)
         
         val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
@@ -104,8 +106,7 @@ class MainActivity: FlutterActivity() {
         service.addCharacteristic(writeChar)
         bluetoothGattServer?.addService(service)
 
-        // --- 2. START ADVERTISING ---
-        val advertiser = bluetoothManager?.adapter?.bluetoothLeAdvertiser
+        val advertiser = adapter.bluetoothLeAdvertiser
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
@@ -115,7 +116,30 @@ class MainActivity: FlutterActivity() {
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
         
-        advertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {})
+        // --- NEW: THE HARDWARE TRUTH-TELLER CALLBACK ---
+        advertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                super.onStartSuccess(settingsInEffect)
+                Handler(Looper.getMainLooper()).post {
+                    eventSink?.success("LOG: OS confirmed broadcast is active on hardware.")
+                }
+            }
+
+            override fun onStartFailure(errorCode: Int) {
+                super.onStartFailure(errorCode)
+                val errorMsg = when(errorCode) {
+                    ADVERTISE_FAILED_DATA_TOO_LARGE -> "DATA_TOO_LARGE"
+                    ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS (OS/Memory Throttling)"
+                    ADVERTISE_FAILED_ALREADY_STARTED -> "ALREADY_STARTED"
+                    ADVERTISE_FAILED_INTERNAL_ERROR -> "INTERNAL_ERROR (Android Bluetooth Stack Crashed)"
+                    ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "FEATURE_UNSUPPORTED (Hardware limitation)"
+                    else -> "UNKNOWN_HARDWARE_ERROR_$errorCode"
+                }
+                Handler(Looper.getMainLooper()).post {
+                    eventSink?.success("FATAL:HARDWARE: $errorMsg")
+                }
+            }
+        })
     }
 
     private fun stopBleServer() {
@@ -123,7 +147,6 @@ class MainActivity: FlutterActivity() {
         bluetoothGattServer?.close()
     }
 
-    // --- 3. THE HARDWARE ACKNOWLEDGMENT MAGIC ---
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onCharacteristicWriteRequest(
             device: BluetoothDevice,
@@ -136,15 +159,13 @@ class MainActivity: FlutterActivity() {
         ) {
             super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
             
-            // THIS is the line that fires the ACK back to the Student's phone to stop the Stopwatch!
             if (responseNeeded) {
                 bluetoothGattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
             }
 
-            // Convert the bytes to a String and push it to the Flutter UI
             val studentUid = String(value, Charsets.UTF_8)
             Handler(Looper.getMainLooper()).post {
-                eventSink?.success(studentUid)
+                eventSink?.success("ACK:$studentUid")
             }
         }
     }
