@@ -1,5 +1,5 @@
 import 'package:ble_signal_app/gatt_ble/QR_code_page.dart';
-import 'package:ble_signal_app/gatt_ble/scanner_page.dart';
+import 'package:ble_signal_app/gatt_ble/scanner_page.dart' hide ReceiverPage;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 

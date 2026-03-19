@@ -2,10 +2,379 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:barcode_widget/barcode_widget.dart' as bw;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-// 1. STRUCTURED LOGGING CLASS
+// ------------------- RECEIVER PAGE -------------------
+
+class ReceiverPage extends StatefulWidget {
+  const ReceiverPage({super.key});
+
+  @override
+  State<ReceiverPage> createState() => _ReceiverPageState();
+}
+
+class _ReceiverPageState extends State<ReceiverPage> {
+  final TextEditingController _uidController = TextEditingController();
+
+  static const MethodChannel _methodChannel = MethodChannel(
+    'com.attendance/command',
+  );
+  static const EventChannel _eventChannel = EventChannel(
+    'com.attendance/events',
+  );
+  StreamSubscription? _eventSubscription;
+
+  bool _isAdvertising = false;
+  final bool _verboseMode = true;
+  final List<String> _terminalLogs = [];
+
+  bool _useForegroundService = true;
+  String _selectedAdvMode = 'LOW_LATENCY';
+
+  final String serviceUuid = "87654321-4321-4321-4321-cba987654321";
+
+  @override
+  void initState() {
+    super.initState();
+    _eventSubscription = _eventChannel.receiveBroadcastStream().listen((
+      dynamic event,
+    ) {
+      String payload = event.toString();
+
+      if (payload.startsWith("FATAL:HARDWARE:")) {
+        _addLog(payload, isError: true);
+        setState(() => _isAdvertising = false);
+      } else if (payload.startsWith("LOG:")) {
+        _addLog(payload, isError: false);
+      } else if (payload.startsWith("ACK:")) {
+        String studentUid = payload.substring(4);
+        _addLog(
+          "HARDWARE ACK: Received Student UID [$studentUid]",
+          isError: false,
+        );
+        HapticFeedback.heavyImpact();
+      } else {
+        _addLog("MSG: $payload", isError: false);
+      }
+    });
+  }
+
+  void _addLog(String msg, {bool isError = false}) {
+    if (!_verboseMode) return;
+    if (!mounted) return;
+    setState(() {
+      String prefix = isError ? "🔴 " : "🟢 ";
+      _terminalLogs.insert(
+        0,
+        "$prefix[${DateTime.now().toIso8601String().split('T')[1].substring(0, 8)}] $msg",
+      );
+    });
+  }
+
+  Future<void> _startNativeServer() async {
+    if (_uidController.text.isEmpty) {
+      _addLog("ERROR: Teacher UID cannot be empty.", isError: true);
+      return;
+    }
+
+    try {
+      await _methodChannel.invokeMethod('startServer', {
+        'useForegroundService': _useForegroundService,
+        'advMode': _selectedAdvMode,
+      });
+      setState(() => _isAdvertising = true);
+      _addLog("PIPE: Native GATT Server Hosted | Mode: $_selectedAdvMode");
+      if (_useForegroundService)
+        _addLog("SHIELD: Foreground Keep-Alive Active.");
+      _addLog("BROADCASTING: $serviceUuid");
+    } catch (e) {
+      _addLog("ERROR: Native bridge failed - $e", isError: true);
+    }
+  }
+
+  Future<void> _stopNativeServer() async {
+    try {
+      await _methodChannel.invokeMethod('stopServer');
+      setState(() => _isAdvertising = false);
+      _addLog("PIPE: Server Offline. Port closed.");
+    } catch (e) {
+      _addLog("ERROR: Could not stop server - $e", isError: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _stopNativeServer();
+    _eventSubscription?.cancel();
+    _uidController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    String qrData = serviceUuid;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A0A),
+      appBar: AppBar(
+        title: const Text(
+          "TEACHER: ATTENDANCE HUB",
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+            color: Colors.white,
+          ),
+        ),
+        backgroundColor: Colors.blueGrey[900],
+        iconTheme: const IconThemeData(color: Colors.white),
+        elevation: 10,
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Expanded(
+              flex: 5,
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.blueGrey[900]!.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
+                ),
+                child: !_isAdvertising
+                    ? SingleChildScrollView(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              "CREATE SESSION",
+                              style: TextStyle(
+                                color: Colors.blueAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: 15),
+                            TextField(
+                              controller: _uidController,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                              ),
+                              decoration: InputDecoration(
+                                labelText: "TEACHER NAME / UID",
+                                labelStyle: const TextStyle(
+                                  color: Colors.white70,
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: const BorderSide(
+                                    color: Colors.blueAccent,
+                                  ),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderSide: const BorderSide(
+                                    color: Colors.cyanAccent,
+                                    width: 2,
+                                  ),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                prefixIcon: const Icon(
+                                  Icons.person,
+                                  color: Colors.blueAccent,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 15),
+                            DropdownButtonFormField<String>(
+                              value: _selectedAdvMode,
+                              dropdownColor: Colors.blueGrey[900],
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                labelText: "BLE Transmit Power",
+                                labelStyle: const TextStyle(
+                                  color: Colors.blueAccent,
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: const BorderSide(
+                                    color: Colors.blueAccent,
+                                  ),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'LOW_LATENCY',
+                                  child: Text("Low Latency (High Power)"),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'BALANCED',
+                                  child: Text("Balanced"),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'LOW_POWER',
+                                  child: Text("Low Power (Battery Saver)"),
+                                ),
+                              ],
+                              onChanged: (val) =>
+                                  setState(() => _selectedAdvMode = val!),
+                            ),
+                            const SizedBox(height: 10),
+                            SwitchListTile(
+                              title: const Text(
+                                "Foreground Keep-Alive",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              subtitle: const Text(
+                                "Stops Infinix from killing server",
+                                style: TextStyle(
+                                  color: Colors.white54,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              value: _useForegroundService,
+                              activeColor: Colors.blueAccent,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: (val) =>
+                                  setState(() => _useForegroundService = val),
+                            ),
+                            const SizedBox(height: 20),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 55,
+                              child: ElevatedButton.icon(
+                                onPressed: _startNativeServer,
+                                icon: const Icon(Icons.radar),
+                                label: const Text(
+                                  "HOST GATT SERVER",
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blueAccent,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text(
+                            "BROADCASTING ACTIVE",
+                            style: TextStyle(
+                              color: Colors.greenAccent,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                          const SizedBox(height: 25),
+                          Container(
+                            padding: const EdgeInsets.all(15),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            child: bw.BarcodeWidget(
+                              barcode: bw.Barcode.qrCode(),
+                              data: qrData,
+                              width: 200,
+                              height: 200,
+                            ),
+                          ),
+                          const SizedBox(height: 30),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: ElevatedButton.icon(
+                              onPressed: _stopNativeServer,
+                              icon: const Icon(Icons.stop_circle),
+                              label: const Text(
+                                "SHUTDOWN SERVER",
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.redAccent,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+            const SizedBox(height: 15),
+            Row(
+              children: [
+                const Icon(Icons.terminal, color: Colors.greenAccent, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  "SYSTEM LOGS",
+                  style: TextStyle(
+                    color: Colors.greenAccent.withOpacity(0.8),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            const Divider(color: Colors.greenAccent, thickness: 0.5),
+            Expanded(
+              flex: 2,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.greenAccent.withOpacity(0.3),
+                  ),
+                ),
+                child: ListView.builder(
+                  itemCount: _terminalLogs.length,
+                  itemBuilder: (c, i) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3.0),
+                    child: Text(
+                      _terminalLogs[i],
+                      style: TextStyle(
+                        color: _terminalLogs[i].startsWith("🔴")
+                            ? Colors.redAccent
+                            : Colors.greenAccent,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ------------------- SCANNER PAGE -------------------
+
 enum LogType { info, success, warning, error }
 
 class LogEvent {
@@ -26,14 +395,23 @@ class ScannerPage extends StatefulWidget {
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
-// --- NEW: Added WidgetsBindingObserver ---
 class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
   final TextEditingController _uidController = TextEditingController();
-  final MobileScannerController _scannerController = MobileScannerController();
+
+  // FIX 1: Not final — reassigned on every new session to give the
+  // MobileScanner widget a completely fresh hardware binding.
+  MobileScannerController _scannerController = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+  );
 
   bool _isScanning = false;
   bool _handshakeComplete = false;
-  int? _rttMs;
+  bool _isProcessingScan = false;
+
+  // RTT: 3 raw samples + computed min and average
+  int? _minRttMs;
+  int? _avgRttMs;
+  List<int> _rttSamples = [];
   int? _rssi;
 
   AndroidScanMode _selectedScanMode = AndroidScanMode.lowLatency;
@@ -48,11 +426,9 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    // Register the lifecycle observer
     WidgetsBinding.instance.addObserver(this);
   }
 
-  // --- NEW: Handle app going to background/foreground to fix black screen ---
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_scannerController.value.isInitialized) {
@@ -73,27 +449,46 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
     debugPrint("[${type.name.toUpperCase()}] $msg");
   }
 
-  void _startScanning() {
+  Future<void> _startScanning() async {
     if (_uidController.text.isEmpty) {
       _log("Validation Failed: Student UID is empty.", type: LogType.error);
       return;
     }
     if (!mounted) return;
-    setState(() => _isScanning = true);
+
+    setState(() {
+      _isScanning = true;
+      _isProcessingScan = false;
+    });
+
     if (_useForegroundService) {
       _log("SHIELD: Foreground Keep-Alive simulated.", type: LogType.warning);
     }
     _log("Scanner Activated. Awaiting QR Payload...", type: LogType.info);
-    _scannerController.start();
+
+    // FIX 2: Do NOT call _scannerController.start() manually.
+    // MobileScanner widget auto-starts when it enters the tree.
+    // A double-start causes a race condition → black camera on next session.
   }
 
-  void _onDetect(BarcodeCapture capture) {
+  void _onDetect(BarcodeCapture capture) async {
+    if (_isProcessingScan) return;
+
     if (capture.barcodes.isNotEmpty && _isScanning) {
+      _isProcessingScan = true;
+
       final String scannedUuid = capture.barcodes.first.rawValue ?? "";
       if (scannedUuid.length > 20) {
         if (!mounted) return;
+
+        // FIX 3: Stop hardware BEFORE removing MobileScanner from the tree.
+        // Tearing down the widget while the camera is running corrupts the
+        // controller's internal surface state for the next session.
+        await _scannerController.stop();
+
+        if (!mounted) return;
         setState(() => _isScanning = false);
-        _scannerController.stop();
+
         _log(
           "TARGET LOCK: Extracted UUID [$scannedUuid]",
           type: LogType.success,
@@ -101,8 +496,28 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
         _executeDistanceBounding(scannedUuid);
       } else {
         _log("Invalid QR Code: Payload too short.", type: LogType.warning);
+        // FIX 4: Unlock on invalid read or the camera appears frozen.
+        _isProcessingScan = false;
       }
     }
+  }
+
+  // FIX 5: Dispose stale controller and create a fresh hardware binding
+  // before the MobileScanner widget re-enters the tree.
+  void _resetSession() {
+    _scannerController.dispose();
+    _scannerController = MobileScannerController(
+      detectionSpeed: DetectionSpeed.noDuplicates,
+    );
+    setState(() {
+      _handshakeComplete = false;
+      _minRttMs = null;
+      _avgRttMs = null;
+      _rttSamples = [];
+      _rssi = null;
+      _isScanning = false;
+      _isProcessingScan = false;
+    });
   }
 
   Future<void> _executeDistanceBounding(String serviceUuidStr) async {
@@ -125,10 +540,11 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
           _connectionSubscription = device.connectionState.listen((
             BluetoothConnectionState state,
           ) {
-            if (state == BluetoothConnectionState.disconnected)
+            if (state == BluetoothConnectionState.disconnected) {
               _log("STATE: Device Disconnected.", type: LogType.warning);
-            else if (state == BluetoothConnectionState.connected)
+            } else if (state == BluetoothConnectionState.connected) {
               _log("STATE: Device Connected.", type: LogType.success);
+            }
           });
 
           try {
@@ -140,6 +556,17 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
                   onTimeout: () =>
                       throw TimeoutException("Connection attempt timed out."),
                 );
+
+            // JITTER FIX: Forces Android to negotiate a ~7.5ms connection
+            // interval instead of the default ~45ms. This cuts variable
+            // scheduling jitter from ±40ms down to ±5ms per sample.
+            await device.requestConnectionPriority(
+              connectionPriorityRequest: ConnectionPriority.high,
+            );
+            _log(
+              "JITTER FIX: High-priority connection interval requested.",
+              type: LogType.info,
+            );
 
             _log("PHASE 3: Discovering Services...", type: LogType.info);
             List<BluetoothService> services = await device
@@ -153,8 +580,9 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
             BluetoothCharacteristic? targetChar;
             for (var service in services) {
               for (var characteristic in service.characteristics) {
-                if (characteristic.uuid.toString() == charUuid)
+                if (characteristic.uuid.toString() == charUuid) {
                   targetChar = characteristic;
+                }
               }
             }
 
@@ -163,40 +591,69 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
                 "PROTOCOL: Target Characteristic Found.",
                 type: LogType.success,
               );
-              _log(
-                "PHASE 4: Executing Stopwatch Distance Calculation...",
-                type: LogType.info,
-              );
+              _log("PHASE 4: Taking 3 RTT samples...", type: LogType.info);
 
               List<int> studentUidBytes = utf8.encode(_uidController.text);
-              Stopwatch sw = Stopwatch()..start();
+              List<int> samples = [];
 
-              try {
-                await targetChar
-                    .write(studentUidBytes, withoutResponse: false)
-                    .timeout(
-                      const Duration(seconds: 3),
-                      onTimeout: () =>
-                          throw TimeoutException("Write ACK timed out."),
-                    );
-              } catch (e) {
-                _log("WRITE FAILED: $e", type: LogType.error);
-                await device.disconnect();
-                return;
+              // 3-sample loop. Using the minimum discards OS scheduling
+              // spikes that inflate individual readings — a relay attack
+              // cannot compress all 3 samples simultaneously.
+              for (int i = 0; i < 3; i++) {
+                try {
+                  _log(
+                    "SAMPLE ${i + 1}/3: Firing write...",
+                    type: LogType.info,
+                  );
+                  final Stopwatch sw = Stopwatch()..start();
+                  await targetChar
+                      .write(studentUidBytes, withoutResponse: false)
+                      .timeout(
+                        const Duration(seconds: 3),
+                        onTimeout: () =>
+                            throw TimeoutException("Write ACK timed out."),
+                      );
+                  sw.stop();
+                  samples.add(sw.elapsedMilliseconds);
+                  _log(
+                    "SAMPLE ${i + 1}/3: ${sw.elapsedMilliseconds}ms ✓",
+                    type: LogType.success,
+                  );
+                  // Brief pause so the server GATT stack is ready for the
+                  // next write — skip the pause after the last sample.
+                  if (i < 2) {
+                    await Future.delayed(const Duration(milliseconds: 50));
+                  }
+                } catch (e) {
+                  _log("SAMPLE ${i + 1}/3 FAILED: $e", type: LogType.error);
+                  await device.disconnect();
+                  return;
+                }
               }
 
-              sw.stop();
-              _rttMs = sw.elapsedMilliseconds;
+              final int minRtt = samples.reduce((a, b) => a < b ? a : b);
+              final int avgRtt =
+                  (samples.reduce((a, b) => a + b) / samples.length).round();
+
               _rssi = await device.readRssi();
 
               _log(
-                "PROTOCOL SUCCESS: ACK in ${_rttMs}ms | RSSI: ${_rssi}dBm",
+                "SAMPLES: [${samples[0]}ms, ${samples[1]}ms, ${samples[2]}ms]",
+                type: LogType.success,
+              );
+              _log(
+                "VERDICT: Min=${minRtt}ms | Avg=${avgRtt}ms | RSSI: ${_rssi}dBm",
                 type: LogType.success,
               );
               HapticFeedback.heavyImpact();
 
               if (!mounted) return;
-              setState(() => _handshakeComplete = true);
+              setState(() {
+                _minRttMs = minRtt;
+                _avgRttMs = avgRtt;
+                _rttSamples = samples;
+                _handshakeComplete = true;
+              });
 
               _log(
                 "PHASE 5: Terminating Session safely...",
@@ -247,7 +704,6 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    // Clean up the observer
     WidgetsBinding.instance.removeObserver(this);
     _uidController.dispose();
     _scannerController.dispose();
@@ -276,240 +732,10 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
             Expanded(
               flex: 5,
               child: _handshakeComplete
-                  ? Container(
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: _rttMs! < 150
-                            ? Colors.green.withOpacity(0.1)
-                            : Colors.red.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: _rttMs! < 150
-                              ? Colors.greenAccent
-                              : Colors.redAccent,
-                          width: 2,
-                        ),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _rttMs! < 150 ? Icons.verified_user : Icons.gpp_bad,
-                            color: _rttMs! < 150
-                                ? Colors.greenAccent
-                                : Colors.redAccent,
-                            size: 90,
-                          ),
-                          const SizedBox(height: 15),
-                          Text(
-                            "${_rttMs}ms",
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 56,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          if (_rssi != null)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.indigo.withOpacity(0.3),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.indigoAccent),
-                              ),
-                              child: Text(
-                                "SIGNAL: ${_rssi} dBm",
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  fontFamily: 'monospace',
-                                ),
-                              ),
-                            ),
-                          const SizedBox(height: 15),
-                          Text(
-                            _rttMs! < 150
-                                ? "PROXIMITY VERIFIED"
-                                : "RELAY ATTACK DETECTED",
-                            style: TextStyle(
-                              color: _rttMs! < 150
-                                  ? Colors.greenAccent
-                                  : Colors.redAccent,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 1.5,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 40),
-                          ElevatedButton.icon(
-                            onPressed: () => setState(() {
-                              _handshakeComplete = false;
-                              _rttMs = null;
-                              _rssi = null;
-                            }),
-                            icon: const Icon(Icons.refresh),
-                            label: const Text("NEW SESSION"),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white12,
-                              foregroundColor: Colors.white,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
+                  ? _buildResultScreen()
                   : _isScanning
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(20),
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          MobileScanner(
-                            controller: _scannerController,
-                            onDetect: _onDetect,
-                          ),
-                          Container(
-                            width: 250,
-                            height: 250,
-                            decoration: BoxDecoration(
-                              border: Border.all(
-                                color: Colors.indigoAccent,
-                                width: 3,
-                              ),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : SingleChildScrollView(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.bluetooth_searching,
-                            color: Colors.indigoAccent,
-                            size: 60,
-                          ),
-                          const SizedBox(height: 15),
-                          TextField(
-                            controller: _uidController,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                            ),
-                            decoration: InputDecoration(
-                              labelText: "ENTER STUDENT UID",
-                              labelStyle: const TextStyle(
-                                color: Colors.white70,
-                              ),
-                              filled: true,
-                              fillColor: Colors.white10,
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: const BorderSide(
-                                  color: Colors.indigoAccent,
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide: const BorderSide(
-                                  color: Colors.cyanAccent,
-                                  width: 2,
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              prefixIcon: const Icon(
-                                Icons.badge,
-                                color: Colors.indigoAccent,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 15),
-                          DropdownButtonFormField<AndroidScanMode>(
-                            value: _selectedScanMode,
-                            dropdownColor: Colors.blueGrey[900],
-                            style: const TextStyle(color: Colors.white),
-                            decoration: InputDecoration(
-                              labelText: "BLE Scan Sensitivity",
-                              labelStyle: const TextStyle(
-                                color: Colors.indigoAccent,
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: const BorderSide(
-                                  color: Colors.indigoAccent,
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                            items: const [
-                              DropdownMenuItem(
-                                value: AndroidScanMode.lowLatency,
-                                child: Text("Low Latency (Aggressive)"),
-                              ),
-                              DropdownMenuItem(
-                                value: AndroidScanMode.balanced,
-                                child: Text("Balanced"),
-                              ),
-                              DropdownMenuItem(
-                                value: AndroidScanMode.lowPower,
-                                child: Text("Low Power (Battery Saver)"),
-                              ),
-                            ],
-                            onChanged: (val) =>
-                                setState(() => _selectedScanMode = val!),
-                          ),
-                          const SizedBox(height: 10),
-                          SwitchListTile(
-                            title: const Text(
-                              "Foreground Keep-Alive",
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                              ),
-                            ),
-                            subtitle: const Text(
-                              "Stops OS background kills",
-                              style: TextStyle(
-                                color: Colors.white54,
-                                fontSize: 12,
-                              ),
-                            ),
-                            value: _useForegroundService,
-                            activeColor: Colors.indigoAccent,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: (val) =>
-                                setState(() => _useForegroundService = val),
-                          ),
-                          const SizedBox(height: 20),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 55,
-                            child: ElevatedButton.icon(
-                              onPressed: _startScanning,
-                              icon: const Icon(Icons.qr_code_scanner),
-                              label: const Text(
-                                "START PROTOCOL",
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.indigoAccent,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                  ? _buildScannerScreen()
+                  : _buildSetupScreen(),
             ),
             const SizedBox(height: 20),
             Expanded(
@@ -558,6 +784,339 @@ class _ScannerPageState extends State<ScannerPage> with WidgetsBindingObserver {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ── Build helpers ──────────────────────────────────────────────────────────
+
+  Widget _buildResultScreen() {
+    // Verdict uses the MINIMUM of the 3 samples — most conservative and
+    // relay-attack-resistant: an attacker cannot shorten all 3 trips at once.
+    final bool verified = _minRttMs! < 150;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: verified
+            ? Colors.green.withOpacity(0.1)
+            : Colors.red.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: verified ? Colors.greenAccent : Colors.redAccent,
+          width: 2,
+        ),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(height: 24),
+
+            // ── Verdict icon ───────────────────────────────────────────────
+            Icon(
+              verified ? Icons.verified_user : Icons.gpp_bad,
+              color: verified ? Colors.greenAccent : Colors.redAccent,
+              size: 70,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              verified ? "PROXIMITY VERIFIED" : "RELAY ATTACK DETECTED",
+              style: TextStyle(
+                color: verified ? Colors.greenAccent : Colors.redAccent,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+
+            // ── 3 sample bubbles ───────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: List.generate(_rttSamples.length, (i) {
+                  final int ms = _rttSamples[i];
+                  final bool isMin = ms == _minRttMs;
+                  return Column(
+                    children: [
+                      Text(
+                        "S${i + 1}",
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isMin
+                              ? Colors.indigoAccent.withOpacity(0.25)
+                              : Colors.white10,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isMin ? Colors.indigoAccent : Colors.white24,
+                            width: isMin ? 2 : 1,
+                          ),
+                        ),
+                        child: Text(
+                          "${ms}ms",
+                          style: TextStyle(
+                            color: isMin ? Colors.cyanAccent : Colors.white70,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                      if (isMin)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 4),
+                          child: Text(
+                            "MIN",
+                            style: TextStyle(
+                              color: Colors.cyanAccent,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                }),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── Min / Avg stat cards ───────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _statCard(
+                      label: "MINIMUM",
+                      value: "${_minRttMs}ms",
+                      color: Colors.cyanAccent,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _statCard(
+                      label: "AVERAGE",
+                      value: "${_avgRttMs}ms",
+                      color: Colors.orangeAccent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // ── RSSI chip ──────────────────────────────────────────────────
+            if (_rssi != null)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.indigo.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.indigoAccent),
+                ),
+                child: Text(
+                  "SIGNAL: ${_rssi} dBm",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            const SizedBox(height: 24),
+
+            // ── New session button ─────────────────────────────────────────
+            ElevatedButton.icon(
+              onPressed: _resetSession,
+              icon: const Icon(Icons.refresh),
+              label: const Text("NEW SESSION"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white12,
+                foregroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _statCard({
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: color.withOpacity(0.8),
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 28,
+              fontWeight: FontWeight.w900,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScannerScreen() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          MobileScanner(controller: _scannerController, onDetect: _onDetect),
+          Container(
+            width: 250,
+            height: 250,
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.indigoAccent, width: 3),
+              borderRadius: BorderRadius.circular(20),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSetupScreen() {
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.bluetooth_searching,
+            color: Colors.indigoAccent,
+            size: 60,
+          ),
+          const SizedBox(height: 15),
+          TextField(
+            controller: _uidController,
+            style: const TextStyle(color: Colors.white, fontSize: 18),
+            decoration: InputDecoration(
+              labelText: "ENTER STUDENT UID",
+              labelStyle: const TextStyle(color: Colors.white70),
+              filled: true,
+              fillColor: Colors.white10,
+              enabledBorder: OutlineInputBorder(
+                borderSide: const BorderSide(color: Colors.indigoAccent),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide: const BorderSide(
+                  color: Colors.cyanAccent,
+                  width: 2,
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              prefixIcon: const Icon(Icons.badge, color: Colors.indigoAccent),
+            ),
+          ),
+          const SizedBox(height: 15),
+          DropdownButtonFormField<AndroidScanMode>(
+            value: _selectedScanMode,
+            dropdownColor: Colors.blueGrey[900],
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: "BLE Scan Sensitivity",
+              labelStyle: const TextStyle(color: Colors.indigoAccent),
+              enabledBorder: OutlineInputBorder(
+                borderSide: const BorderSide(color: Colors.indigoAccent),
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            items: const [
+              DropdownMenuItem(
+                value: AndroidScanMode.lowLatency,
+                child: Text("Low Latency (Aggressive)"),
+              ),
+              DropdownMenuItem(
+                value: AndroidScanMode.balanced,
+                child: Text("Balanced"),
+              ),
+              DropdownMenuItem(
+                value: AndroidScanMode.lowPower,
+                child: Text("Low Power (Battery Saver)"),
+              ),
+            ],
+            onChanged: (val) => setState(() => _selectedScanMode = val!),
+          ),
+          const SizedBox(height: 10),
+          SwitchListTile(
+            title: const Text(
+              "Foreground Keep-Alive",
+              style: TextStyle(color: Colors.white, fontSize: 14),
+            ),
+            subtitle: const Text(
+              "Stops OS background kills",
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+            value: _useForegroundService,
+            activeColor: Colors.indigoAccent,
+            contentPadding: EdgeInsets.zero,
+            onChanged: (val) => setState(() => _useForegroundService = val),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            height: 55,
+            child: ElevatedButton.icon(
+              onPressed: _startScanning,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text(
+                "START PROTOCOL",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.indigoAccent,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
